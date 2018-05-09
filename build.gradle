@@ -1,0 +1,61 @@
+plugins {
+    id 'java'
+    id 'scala'
+    id 'maven-publish'
+}
+
+project.sourceCompatibility = 1.8
+project.targetCompatibility = 1.8
+
+sourceSets.main.scala.srcDir "src/main/java"
+sourceSets.main.java.srcDirs = []
+
+group = 'com.ntent'
+ext.prodVersion = '0.1'
+
+description = """Ntent CommonCrawl Graph Input Generator"""
+
+repositories {
+    maven { url "http://repo.maven.apache.org/maven2" }
+}
+
+// adds the project name and version number to MANIFEST.MF
+jar {
+    manifest {
+        attributes("Implementation-Title": baseName,
+                "Implementation-Version": prodVersion + "-" + version,
+                "Build-Date": new Date())
+    }
+}
+
+dependencies {
+    compile "org.apache.spark:spark-core_$scala_dep_version:$spark_version"
+    compile "org.apache.spark:spark-sql_$scala_dep_version:$spark_version"
+    compile "org.apache.spark:spark-mllib_$scala_dep_version:$spark_version"
+
+    compile group: 'commons-validator', name: 'commons-validator', version: '1.6'
+
+    compile fileTree(dir: 'libs', include: ['*.jar'])
+
+    // scala
+    compile "org.scala-lang:scala-library:$scala_version"
+}
+
+// builds a JAR with sources and documents.
+task sourcesJar(type: Jar, dependsOn: classes) {
+    //println ('Creating sources jar file to publish sources to repo.')
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+// implicit javadoc task
+task javadocJar(type: Jar, dependsOn: javadoc) {
+    classifier = 'javadoc'
+    from javadoc.destinationDir
+}
+
+// artifacts that need to be built
+artifacts {
+    archives sourcesJar
+    archives javadocJar
+}

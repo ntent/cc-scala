@@ -1,0 +1,12 @@
+syntax: glob
+.gradle/
+.idea/
+build/
+vagrant*
+*.iml
+classes/
+ntent.environment.gradle
+.DS_Store
+target/
+out/
+
