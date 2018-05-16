@@ -11,27 +11,52 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
   */
 object HostLinksToGraph {
 
+  def convertArrayToArgumentMaps(args: Array[String]) : Map[String, String] =  {
+    import scala.collection.mutable
+    val result = mutable.Map[String, String]()
+    try {
+      result("InputParquet")   = args(0)
+      result("EdgesOutput")    = args(1)
+      result("VerticesOutput") = args(2)
+      result("ValidateHosts")  = args(3)
+      result("SaveAsText")     = args(4)
+      result("NumPartitions")  = args(5)
+      result("VertexIDs")      = args(6)
+    } catch {
+      case _: IndexOutOfBoundsException => {}
+    }
+    result.toMap
+  }
+
   def main(args: Array[String]): Unit = {
     val jobName: String = this.getClass.getName
 
     val fs = FileSystem.get(new Configuration())
     val conf = SparkSession.builder().appName(jobName)
-    val sparkSession = conf.getOrCreate()
-    val sc = sparkSession.sparkContext
+    val spark = conf.getOrCreate()
+    val sc = spark.sparkContext
     sc.setLogLevel("warn")
 
-    val inputParquetPath = ""
-    val edgesOutput = ""
-    val verticesOutput = ""
+    val mapOfArguments = convertArrayToArgumentMaps(args);
 
-    processParquetFile(sparkSession, inputParquetPath, edgesOutput, verticesOutput)
+    processParquetFile(spark, mapOfArguments.get("InputParquet"),
+      mapOfArguments.get("EdgesOutput"), mapOfArguments.get("VerticesOutput"),
+      mapOfArguments.get("ValidateHosts"), mapOfArguments.get("SaveAsText"),
+      mapOfArguments.get("NumPartitions"), mapOfArguments.get("VertexIDs"))
   }
 
-  def processParquetFile(spark: SparkSession, inputParquetPath: String, edgesOutput: String, verticesOutput: String) = {
+  def processParquetFile(spark: SparkSession, inputParquet: Option[String], edgesOutput: Option[String],
+                         verticesOutput: Option[String], validateHosts: Option[String],
+                         saveAsText: Option[String], numPartitions: Option[String], vertexIDs: Option[String]) {
     import spark.implicits._
 
-    val edges = spark.read.parquet(inputParquetPath).dropDuplicates("s", "t")
-    val ids = verticesAssignIds(edges, spark, verticesOutput)
+    if (inputParquet.isEmpty || edgesOutput.isEmpty || verticesOutput.isEmpty) return
+
+    val edges = spark.read.parquet(inputParquet.get).dropDuplicates("s", "t")
+
+    val mustSaveAsText = saveAsText.isEmpty == false && saveAsText.get.toBoolean == true
+    val ids = if (vertexIDs.isEmpty) verticesAssignIds(edges, spark, verticesOutput.get, mustSaveAsText, validateHosts, numPartitions)
+    else spark.read.parquet(vertexIDs.get)
 
     val edgesSJoin = edges.join(ids, $"s" === $"name")
     val edgesSID = edgesSJoin.select($"id".as("s"), $"t")
@@ -39,26 +64,36 @@ object HostLinksToGraph {
     val edgesTID = edgesTJoin.select($"s", $"id".as("t"))
     val sortedEdges = edgesTID.sort($"s")
 
-    saveAsTxtZip(sortedEdges, edgesOutput + "/zip/")
-    saveAsParquet(sortedEdges, edgesOutput + "/parquet/")
+    if (mustSaveAsText) {
+      saveAsTxtZip(sortedEdges, edgesOutput.get + "/zip/")
+    }
+    saveAsParquet(sortedEdges, edgesOutput.get + "/parquet/")
   }
 
-  def verticesAssignIds(edges: DataFrame, spark: SparkSession, verticesOutput: String) = {
+  def verticesAssignIds(edges: DataFrame, spark: SparkSession, verticesOutput: String,
+                        mustSaveAsText: Boolean, validateHosts: Option[String], numPartitions: Option[String]) = {
     import spark.implicits._
 
     val source = edges.select($"s".as("name"))
     val target = edges.select($"t".as("name"))
 
     val ids = source.union(target).distinct
-    val isValidUDF = udf(reverseHostIsValid _)
-    val validIds = ids.filter(isValidUDF($"name"))
+
+    val mustValidateHosts = validateHosts.isEmpty == false && validateHosts.get.toBoolean == true
+    val validIds = if (mustValidateHosts) {
+      val isValidUDF = udf(reverseHostIsValid _)
+      ids.filter(isValidUDF($"name"))
+    } else ids
+
     val idsRDD = validIds.select($"name").rdd
       .map(_.getString(0))
-      .sortBy(identity, ascending=true, numPartitions = 100)
+      .sortBy(identity, ascending=true, numPartitions = numPartitions.getOrElse("100").toInt)
       .zipWithIndex()
     val idsDF = idsRDD.toDF("name", "id").select($"id", $"name")
 
-    saveAsTxtZip(idsDF, verticesOutput + "/zip/")
+    if (mustSaveAsText) {
+      saveAsTxtZip(idsDF, verticesOutput + "/zip/")
+    }
     saveAsParquet(idsDF, verticesOutput + "/parquet/")
     idsDF
   }
